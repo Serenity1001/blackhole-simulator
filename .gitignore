@@ -1,0 +1,10 @@
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Claude Code (local only — preview server config)
+.claude/

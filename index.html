@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Black Hole Simulator - Interstellar Style</title>
+<meta name="description" content="Interstellar-inspired black hole simulator. Throw celestial bodies into Gargantua and watch particle physics, accretion disk flow, and event-horizon absorption in real time.">
+<meta name="theme-color" content="#000000">
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Black Hole Simulator">
+<meta property="og:description" content="Interstellar-style black hole simulator. Throw moons, planets, and stars into Gargantua.">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; background:#000; overflow:hidden; font-family: 'Segoe UI', sans-serif; color:#fff; }
+  canvas { display:block; position:absolute; top:0; left:0; }
+  #ui {
+    position:absolute; top:0; left:0; padding:18px; z-index:10;
+    background:linear-gradient(180deg, rgba(0,0,0,0.75), rgba(0,0,0,0));
+    width:320px;
+  }
+  h1 { font-size:16px; letter-spacing:2px; margin-bottom:14px; color:#eee; font-weight:300; }
+  .group { margin-bottom:18px; }
+  .label { font-size:11px; letter-spacing:1.5px; color:#888; margin-bottom:6px; text-transform:uppercase; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  button {
+    background:rgba(255,255,255,0.06); color:#ddd; border:1px solid rgba(255,255,255,0.15);
+    padding:7px 11px; font-size:12px; cursor:pointer; border-radius:3px;
+    transition:all 0.2s; letter-spacing:0.5px;
+  }
+  button:hover { background:rgba(255,255,255,0.15); border-color:rgba(255,255,255,0.4); }
+  button.active { background:rgba(255,255,255,0.25); border-color:#fff; color:#fff; }
+  .info { font-size:10px; color:#666; margin-top:4px; }
+  #speedBox { display:flex; align-items:center; gap:10px; }
+  #speedVal { font-size:18px; font-weight:300; color:#fff; min-width:50px; }
+  input[type=range] { flex:1; accent-color:#fff; }
+  #stats { position:absolute; bottom:14px; left:18px; font-size:10px; color:#555; letter-spacing:1px; z-index:10;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <h1>◉ BLACK HOLE SIMULATOR</h1>
+
+  <div class="group">
+    <div class="label">블랙홀 질량 (Mass)</div>
+    <div class="row" id="massBtns">
+      <button data-mass="small">소형 · Cyg X-1</button>
+      <button data-mass="medium" class="active">중형 · IMBH</button>
+      <button data-mass="large">대형 · TON 618</button>
+    </div>
+    <div class="info" id="massInfo">~ 10,000 M☉ · 중간질량 블랙홀</div>
+  </div>
+
+  <div class="group">
+    <div class="label">천체 투척 (Throw Object)</div>
+    <div class="row">
+      <button data-obj="moon">달</button>
+      <button data-obj="earth">지구</button>
+      <button data-obj="saturn">토성</button>
+      <button data-obj="jupiter">목성</button>
+      <button data-obj="sun">태양</button>
+    </div>
+    <div class="info">버튼 클릭 → 화면 가장자리에서 투척</div>
+  </div>
+
+  <div class="group">
+    <div class="label">시뮬레이션 배속</div>
+    <div id="speedBox">
+      <input type="range" id="speed" min="1" max="100" value="1" step="1">
+      <div id="speedVal">1x</div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="label">관찰 각도 (View Tilt)</div>
+    <div id="speedBox">
+      <input type="range" id="tilt" min="0" max="90" value="9" step="1">
+      <div id="speedVal"><span id="tiltVal">9</span>°</div>
+    </div>
+    <div class="info">0° = 측면 · 90° = 정면</div>
+  </div>
+
+  <div class="group">
+    <div class="label">화면 줌 (Zoom)</div>
+    <div id="speedBox">
+      <button id="zoomOut">−</button>
+      <input type="range" id="zoom" min="30" max="400" value="100" step="5">
+      <button id="zoomIn">+</button>
+      <div id="speedVal"><span id="zoomVal">100</span>%</div>
+    </div>
+    <div class="info">마우스 휠로도 조작 가능</div>
+  </div>
+
+  <div class="group">
+    <div class="label">입자 밝기 (Brightness)</div>
+    <div id="speedBox">
+      <input type="range" id="bright" min="20" max="300" value="100" step="5">
+      <div id="speedVal"><span id="brightVal">100</span>%</div>
+    </div>
+  </div>
+
+  <div class="group">
+    <button id="reset">↻ 리셋</button>
+  </div>
+</div>
+<div id="stats">PARTICLES: <span id="pc">0</span> · OBJECTS: <span id="oc">0</span></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, CX, CY;
+function resize(){ W=canvas.width=innerWidth; H=canvas.height=innerHeight; CX=W/2; CY=H/2; }
+resize(); addEventListener('resize', resize);
+
+// === Black Hole config ===
+const MASSES = {
+  small:  { name:'Cygnus X-1', solar:21,         radius:70,  disk:150, info:'~ 21 M☉ · 항성질량 블랙홀' },
+  medium: { name:'IMBH',       solar:10000,      radius:115, disk:245, info:'~ 10,000 M☉ · 중간질량 블랙홀' },
+  large:  { name:'TON 618',    solar:66000000000,radius:200, disk:430, info:'~ 660억 M☉ · 초대질량 블랙홀' }
+};
+let currentMass = 'medium';
+let speedMult = 1;
+let brightness = 0.06; // particle brightness multiplier (slider 100% = 0.06x actual)
+let zoom = 1.0;       // view zoom
+
+// === Celestial bodies ===
+const BODIES = {
+  moon:    { r:6,  color:'#c8c8c8', name:'Moon' },
+  earth:   { r:10, color:'#4a90d9', name:'Earth' },
+  saturn:  { r:22, color:'#d4b17a', ring:true, name:'Saturn' },
+  jupiter: { r:26, color:'#c9a07a', bands:true, name:'Jupiter' },
+  sun:     { r:34, color:'#ffd27a', star:true, name:'Sun' }
+};
+
+// === Accretion disk particles (Interstellar style) ===
+// Disk is mostly in the plane but warped; we use 3D with projection to mimic the lensed ring above/below.
+let particles = [];
+let objects = []; // legacy — kept empty for safety
+
+function makeParticles(){
+  particles = [];
+  const cfg = MASSES[currentMass];
+  const inner = cfg.radius * 1.18;
+  const outer = cfg.disk;
+  const count = Math.min(6000, Math.floor(2800 + cfg.disk * 10));
+  for (let i=0; i<count; i++){
+    // concentrate more toward inner (hotter, brighter)
+    const r = inner + Math.pow(Math.random(),0.75)*(outer-inner);
+    const theta = Math.random()*Math.PI*2;
+    // very thin disk (edge-on look)
+    const z = (Math.random()-0.5) * (2.5 + (r-inner)*0.02);
+    particles.push({
+      r, theta, z,
+      w: 1 / Math.pow(r/inner, 1.5) * 0.04 * (0.85+Math.random()*0.3),
+      heat: Math.random()*0.5 + 0.7,
+      size: Math.random()*1.4 + 0.5,
+      life: 1
+    });
+  }
+}
+makeParticles();
+
+// === Interstellar-like 3D projection with gravitational lensing fake ===
+// We tilt the disk by angle tilt; points above/below horizon are lensed to appear above the BH -> classic "ring on top"
+// Viewing tilt — 0 = edge-on (sliver), Math.PI/2 = face-on (full disk from above).
+// Dynamically controlled by the UI slider.
+let viewTilt = 0.16;
+
+function project(x, y, z){
+  // viewTilt: 0 → edge-on (disk collapses to sliver), π/2 → face-on (full annulus).
+  // Internally we rotate by the complement so the slider matches user intuition.
+  const effTilt = Math.PI/2 - viewTilt;
+  const cT = Math.cos(effTilt), sT = Math.sin(effTilt);
+  const y2 = y*cT - z*sT;
+  const z2 = y*sT + z*cT;
+  return { x, y: y2, z: z2 };
+}
+
+// --- Pseudo-noise for organic turbulence in the accretion flow ---
+// Cheap, deterministic, bounded in [-1, 1] approximately. Layered sines produce
+// soft spatial structure without the cost of real Perlin/curl noise.
+function flowNoise(a, b){
+  return (
+    Math.sin(a*2.1 + b*1.3 + 0.3) * 0.5 +
+    Math.sin(a*1.27 - b*2.7 + 1.7) * 0.3 +
+    Math.sin(a*0.43 + b*3.9 - 2.1) * 0.2
+  );
+}
+let flowTime = 0; // advances each frame, drifts the noise field
+
+function drawBlackHoleShadow(){
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+  // Pure black event horizon (drawn BEFORE disk/lensed arc so top ring can overlap)
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(CX, CY, rs, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function drawPhotonRing(){
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // Dim red halo (outer bloom) — subdued ember tone
+  const halo = ctx.createRadialGradient(CX, CY, rs*1.0, CX, CY, rs*3.2);
+  halo.addColorStop(0, 'rgba(140,30,20,0.0)');
+  halo.addColorStop(0.15, 'rgba(130,28,18,0.40)');
+  halo.addColorStop(0.45, 'rgba(90,20,14,0.18)');
+  halo.addColorStop(1, 'rgba(50,10,8,0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(CX, CY, rs*3.2, 0, Math.PI*2);
+  ctx.fill();
+
+  // Thin photon ring — a dull red-orange glow hugging the horizon
+  const ring = ctx.createRadialGradient(CX, CY, rs*1.01, CX, CY, rs*1.35);
+  ring.addColorStop(0, 'rgba(180,60,40,0.0)');
+  ring.addColorStop(0.15, 'rgba(200,70,45,0.85)');
+  ring.addColorStop(0.5,  'rgba(140,30,20,0.65)');
+  ring.addColorStop(1,    'rgba(80,15,10,0)');
+  ctx.fillStyle = ring;
+  ctx.beginPath();
+  ctx.arc(CX, CY, rs*1.35, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Scales particle RGB with brightness so low slider values actually DARKEN color
+// (not just alpha). At slider 100% (default brightness=0.06) cs=1 (no change).
+// Below that, colors fade toward black. Above 100%, clamped at 1.
+function colorScale(){
+  return Math.max(0.05, Math.min(1, brightness / 0.06));
+}
+
+function particleColor(tNorm){
+  // Low-luminosity red palette — dying-ember / blood accretion look.
+  // tNorm: 1 = inner (slightly brighter red) → 0 = outer (near-black crimson).
+  let R,G,B;
+  if (tNorm > 0.75){ R=200; G=55;  B=35;  }  // inner — deep red
+  else if (tNorm > 0.5){ R=160; G=30;  B=20;  } // burgundy
+  else if (tNorm > 0.25){ R=110; G=18;  B=12;  } // dark crimson
+  else { R=70;  G=10;  B=8;   }                  // near-black red
+  const cs = colorScale();
+  return {R: Math.round(R*cs), G: Math.round(G*cs), B: Math.round(B*cs)};
+}
+
+function drawDiskLayer(front){
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (const p of particles){
+    const x = Math.cos(p.theta)*p.r;
+    const y = Math.sin(p.theta)*p.r;
+    const pr = project(x, y, p.z);
+    const dist2D = Math.hypot(pr.x, pr.y);
+    const behind = pr.z < 0;
+    if (front && behind) continue;
+    if (!front && !behind) continue;
+    // occlusion for behind particles
+    if (behind && dist2D < rs*0.98) continue;
+
+    const tNorm = 1 - Math.min(1, (p.r - rs)/ (cfg.disk - rs));
+    const heat = p.heat * (0.5 + tNorm*1.0);
+    const c = particleColor(tNorm);
+    const sx = CX+pr.x, sy = CY+pr.y;
+    const size = p.size * (1 + tNorm*0.8);
+
+    // soft glow halo
+    const a1 = Math.min(1, heat*0.45*brightness);
+    ctx.fillStyle = `rgba(${c.R},${c.G},${c.B},${a1})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size*3, 0, Math.PI*2);
+    ctx.fill();
+
+    // bright core
+    ctx.fillStyle = `rgba(${c.R},${c.G},${c.B},${Math.min(1,heat*brightness)})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawEquatorBeam(){
+  // Bright horizontal beam along the disk equator — the iconic "light saber" streak
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+  const beamLen = cfg.disk * 1.8;
+  const beamH = rs * 0.55;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // Wide soft outer halo
+  const g1 = ctx.createRadialGradient(CX, CY, 0, CX, CY, beamLen);
+  // use transform to squash into a horizontal ellipse
+  ctx.translate(CX, CY);
+  ctx.scale(1, beamH / beamLen);
+
+  const glow = ctx.createRadialGradient(0,0,0, 0,0, beamLen);
+  glow.addColorStop(0.0, `rgba(210,70,45,${0.9*brightness})`);
+  glow.addColorStop(0.08,`rgba(180,45,30,${0.8*brightness})`);
+  glow.addColorStop(0.25,`rgba(130,25,18,${0.5*brightness})`);
+  glow.addColorStop(0.55,`rgba(80,15,10,${0.2*brightness})`);
+  glow.addColorStop(1.0, 'rgba(40,8,6,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0,0, beamLen, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Thin hot core streak
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.translate(CX, CY);
+  ctx.scale(1, (rs*0.18) / beamLen);
+  const core = ctx.createRadialGradient(0,0,0, 0,0, beamLen);
+  core.addColorStop(0.0, `rgba(240,110,70,${0.95*brightness})`);
+  core.addColorStop(0.15,`rgba(200,65,40,${0.8*brightness})`);
+  core.addColorStop(0.5, `rgba(130,25,18,${0.35*brightness})`);
+  core.addColorStop(1.0, 'rgba(60,10,8,0)');
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(0,0, beamLen, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawLensedTopArc(){
+  // The iconic "ring over the top" — far-side disk photons bent up around BH.
+  // We build it from particle data so it animates with the rotating disk.
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (const p of particles){
+    const x = Math.cos(p.theta)*p.r;
+    const y = Math.sin(p.theta)*p.r;
+    const pr = project(x, y, p.z);
+    if (pr.z >= 0) continue; // only back-side particles contribute to the top arc
+    const dist2D = Math.hypot(pr.x, pr.y);
+    if (dist2D > cfg.disk) continue;
+
+    // Map back-side particles to an arc that wraps OVER the BH and connects
+    // smoothly to the equator at both ends (continuous flow with the front disk).
+    const ang = Math.atan2(pr.y, pr.x); // original projected angle (disk frame)
+
+    // Arc radius scales with the particle's orbital radius so outer particles
+    // form an outer arc that meets the disk's outer equator extent.
+    const rArc = rs * 1.05 + (p.r - rs) * 0.62;
+
+    // spread = π/2 → arc spans exactly the upper semicircle: endpoints at angles
+    // 0 and -π (i.e., screen y = 0). This is what visually bridges to the equator.
+    const spread = Math.PI / 2;
+    const arcAng = -Math.PI/2 + Math.cos(ang) * spread;
+    const lx = Math.cos(arcAng) * rArc;
+    const ly = Math.sin(arcAng) * rArc;
+
+    const tNorm = 1 - Math.min(1, (p.r - rs)/ (cfg.disk - rs));
+    const c = particleColor(tNorm);
+    const heat = p.heat * (0.6 + tNorm*0.9);
+    const size = p.size * (1 + tNorm*0.6);
+    const sx = CX+lx, sy = CY+ly;
+
+    // Fade the arc near the equator endpoints so it blends smoothly into the
+    // horizontal flow rather than ending abruptly.
+    const endFade = Math.min(1, Math.abs(Math.sin(arcAng)) * 1.6);
+
+    ctx.fillStyle = `rgba(${c.R},${c.G},${c.B},${Math.min(1,heat*0.4*brightness*endFade)})`;
+    ctx.beginPath(); ctx.arc(sx, sy, size*3.2, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = `rgba(${c.R},${c.G},${c.B},${Math.min(1,heat*0.95*brightness*endFade)})`;
+    ctx.beginPath(); ctx.arc(sx, sy, size*1.1, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function updateParticles(dt){
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+  flowTime += 0.004 * dt;
+  for (const p of particles){
+    // Organic turbulence: noise-driven angular wobble + radial breathing.
+    // The noise field slowly drifts with flowTime, producing eddies and streams
+    // instead of a perfectly Keplerian disk.
+    const n1 = flowNoise(p.theta*1.5, p.r*0.015 + flowTime);
+    const n2 = flowNoise(p.theta*2.0 + 7, p.r*0.025 - flowTime*0.7);
+    p.theta += (p.w + n1 * 0.006) * dt;
+    p.r    += n2 * 0.35 * dt;
+
+    // Constant slow inward drift (mass accretion)
+    p.r -= 0.03 * dt;
+    // stronger sink near horizon
+    if (p.r < rs*1.3) p.r -= 0.08 * dt;
+
+    // keep particles within disk band
+    if (p.r < rs*1.05 || p.r > cfg.disk*1.05){
+      p.r = cfg.disk * (0.8 + Math.random()*0.2);
+      p.theta = Math.random()*Math.PI*2;
+      p.z = (Math.random()-0.5)*6;
+    }
+  }
+}
+
+// === Thrown objects as particle clusters ===
+// Each thrown body is a swarm of sub-particles that fall in individually,
+// producing naturally-emergent tidal spaghettification and streaming tails.
+
+const BODY_PALETTES = {
+  moon:    [[210,210,210],[170,170,170],[230,230,230],[150,150,160],[190,185,180]],
+  earth:   [[60,140,220],[90,180,230],[60,170,90],[200,190,170],[45,110,190]],
+  saturn:  [[220,185,130],[190,150,100],[240,205,150],[170,135,90],[200,170,120]],
+  jupiter: [[210,170,130],[165,115,85],[230,190,150],[180,130,95],[140,95,70]],
+  sun:     [[255,245,210],[255,215,135],[255,170,90],[255,230,170],[255,130,60]]
+};
+
+let bodyParticles = []; // all particles from thrown objects
+let cores = [];         // invisible point-mass at cluster center (planet's gravity well)
+let clusterSeq = 0;     // unique id per throw
+let sinks = [];         // impact points on EH surface that suck in scattered particles
+const G_CORE = 0.08;    // cluster self-gravity strength
+const CORE_SOFT = 4;    // softening ε² used for core gravity (keep consistent with throw & update!)
+const MAX_PARTICLE_V = 7; // hard speed cap to prevent numerical runaway
+
+function throwObject(kind){
+  const b = BODIES[kind];
+  const palette = BODY_PALETTES[kind];
+  // spawn at random edge
+  const edge = Math.floor(Math.random()*4);
+  let x,y;
+  if (edge===0){ x=-40; y=Math.random()*H; }
+  else if (edge===1){ x=W+40; y=Math.random()*H; }
+  else if (edge===2){ x=Math.random()*W; y=-40; }
+  else { x=Math.random()*W; y=H+40; }
+
+  // aim roughly toward BH
+  const dx = CX - x, dy = CY - y;
+  const d = Math.hypot(dx,dy);
+  const nx = dx/d, ny = dy/d;
+  const tx = -ny, ty = nx;
+  const side = Math.random()<0.5 ? 1 : -1;
+
+  // 50% capture vs 50% grazing orbit
+  const captured = Math.random() < 0.5;
+  const baseSpeed = 0.8 + Math.random()*0.3;
+  const tanBoost = captured ? (0.1 + Math.random()*0.3)
+                             : (0.9 + Math.random()*0.5);
+  const vxBase = nx*baseSpeed + tx*tanBoost*side;
+  const vyBase = ny*baseSpeed + ty*tanBoost*side;
+
+  // Rigid-body cluster: particles maintain fixed offsets from core, co-rotating.
+  // BH gravity acts on the CORE as if the cluster were a single object (as before).
+  // Particles "detach" progressively when tidal forces near the BH exceed cohesion —
+  // implemented as an exposure-threshold release rather than numerical N-body self-gravity.
+  const cid = ++clusterSeq;
+  const N = Math.floor(120 + b.r * 10);
+  const radius = b.r;
+  const spinSign = Math.random() < 0.5 ? 1 : -1;
+  const omega = spinSign * (0.015 + Math.random()*0.02); // rigid rotation rate rad/frame
+
+  cores.push({
+    cid, x, y, vx:vxBase, vy:vyBase, mass:N, alive:true,
+    angle: 0, omega, radius,
+    d: 9999, nx: 0, ny: 0 // updated each frame; used for release logic
+  });
+
+  for (let i=0; i<N; i++){
+    const ang = Math.random()*Math.PI*2;
+    const rr = Math.pow(Math.random(),0.5) * radius;
+    const ox = Math.cos(ang)*rr;
+    const oy = Math.sin(ang)*rr;
+
+    const col = palette[Math.floor(Math.random()*palette.length)];
+    bodyParticles.push({
+      cid,
+      attached: true,
+      ox, oy,
+      x: x + ox, y: y + oy,
+      px: x + ox, py: y + oy, // previous-frame position (for streak rendering)
+      vx: vxBase, vy: vyBase, // irrelevant while attached; overwritten on release
+      size: 0.7 + Math.random()*1.3,
+      r: col[0], g: col[1], b: col[2],
+      life: 1,
+      hot: 0,
+      shredded: false,
+      decay: 0,
+      isTail: false
+    });
+  }
+
+  // Flash sun a little since it emits its own light
+  if (kind==='sun'){
+    for (const p of bodyParticles.slice(-N)){
+      p.hot = 0.5 + Math.random()*0.3;
+    }
+  }
+}
+
+function updateBodyParticles(dt){
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+  const G = currentMass==='small'? 900 : currentMass==='medium'? 2200 : 4800;
+
+  // --- Pass 1: update cluster cores under BH gravity (same dynamics as original single object) ---
+  const coreMap = new Map();
+  for (const core of cores){
+    if (!core.alive) continue;
+    const dx = CX - core.x, dy = CY - core.y;
+    const d2 = dx*dx + dy*dy;
+    const d = Math.sqrt(d2);
+    const nx = dx/d, ny = dy/d;
+    const extra = d < rs*3 ? (1 + (rs*3/d - 1)*1.8) : 1;
+    const aBH = G * extra / Math.max(d2, 300);
+    core.vx += nx * aBH * dt * 0.10;
+    core.vy += ny * aBH * dt * 0.10;
+    // circularizing force — spiral rather than fly-by
+    if (d < rs*3.5){
+      const radialV = core.vx*nx + core.vy*ny;
+      core.vx -= nx * radialV * 0.02 * dt;
+      core.vy -= ny * radialV * 0.02 * dt;
+    }
+    if (d < rs*2.5){
+      const drag = 0.004 * dt;
+      core.vx *= (1 - drag); core.vy *= (1 - drag);
+    }
+    core.x += core.vx * dt;
+    core.y += core.vy * dt;
+    core.angle += core.omega * dt;
+    // cache for release logic
+    core.d = d; core.nx = nx; core.ny = ny;
+    if (d < rs*1.0){
+      core.alive = false;
+      // Impact point on EH surface (direction from BH back toward core's approach)
+      const sx = CX - nx * rs * 0.95;
+      const sy = CY - ny * rs * 0.95;
+      sinks.push({
+        x: sx, y: sy,
+        cid: core.cid,
+        life: 1.0,                  // normalized 1 → 0
+        strength: G * 3.5,          // suction strength scales with BH mass
+        bornAt: performance.now()
+      });
+      // Bright impact flash at the point of contact
+      flashes.push({ x:sx, y:sy, r: rs*0.35, life: 1 });
+    }
+    if (core.alive) coreMap.set(core.cid, core);
+  }
+  cores = cores.filter(c => c.alive);
+
+  // --- Pass 2: particles ---
+  // Attached particles follow the core rigidly (perfect sphere preserved).
+  // Detached particles do full free-fall physics with BH gravity + drag.
+  for (const p of bodyParticles){
+    if (p.attached){
+      const core = coreMap.get(p.cid);
+      if (!core){
+        // core crossed horizon — release this particle with its last rigid-motion velocity.
+        // (vx/vy were last written while still attached in the previous frame.)
+        p.attached = false;
+      } else {
+        // rigid rotation of offset into world frame
+        const c = Math.cos(core.angle), s = Math.sin(core.angle);
+        const wx = p.ox*c - p.oy*s;
+        const wy = p.ox*s + p.oy*c;
+        p.x = core.x + wx;
+        p.y = core.y + wy;
+        // "rigid" velocity = core velocity + ω × offset (for use at release moment)
+        p.vx = core.vx - core.omega * wy;
+        p.vy = core.vy + core.omega * wx;
+
+        // --- Progressive detachment based on BH exposure ---
+        // phase: 0 while core.d > 1.5rs (fully intact sphere),
+        //        1 when core.d reaches rs (all BH-side particles released).
+        const phase = Math.max(0, (rs*1.5 - core.d) / (rs*0.5));
+        if (phase > 0){
+          // exposure: how far this particle sticks out toward the BH (−R..+R)
+          const exposure = wx*core.nx + wy*core.ny;
+          // threshold: shrinks from +radius (no release) at phase 0 down to −radius at phase 1
+          const threshold = core.radius * (1 - phase*2);
+          if (exposure > threshold){
+            p.attached = false;
+          }
+        }
+
+        // still attached → just heat update & EH check (won't happen while attached since
+        // core dies before particles reach EH, but guard anyway)
+        if (core.d < rs*3){
+          p.hot = Math.min(1, p.hot + 0.012*dt);
+        }
+        continue; // skip free-fall integration
+      }
+    }
+
+    // --- Free-fall integration (detached particles) ---
+    // record previous position for motion-streak rendering
+    p.px = p.x; p.py = p.y;
+
+    const dx = CX - p.x, dy = CY - p.y;
+    const d2 = dx*dx+dy*dy;
+    const d = Math.sqrt(d2);
+    const nx = dx/d, ny = dy/d;
+
+    // === HORIZONTAL SHRED BURST ===
+    // When a particle approaches the horizon, trigger a one-shot "shred" event:
+    // its radial plunge is converted into a tangential (disk-plane) burst with
+    // random splay, spawning trailing child particles that form an elongated
+    // spaghettified tail whirling around the event horizon.
+    if (!p.shredded && !p.isTail && d < rs*1.10 && d > rs*0.80){
+      // CCW tangent unit vector at (p.x,p.y) about BH core
+      const tx = ny, ty = -nx;
+      // existing tangential component (signed along CCW tangent)
+      const vtSigned = p.vx*tx + p.vy*ty;
+      const dir = vtSigned >= 0 ? 1 : -1; // preserve orbital handedness
+      // burst magnitude — scales with mass config so big BH throws harder
+      const burst = (currentMass==='small' ? 3.2 : currentMass==='medium' ? 4.0 : 4.8);
+      const vtNew = dir * (Math.abs(vtSigned)*1.8 + burst);
+      // random splay (mostly tangential with slight radial jitter ±20%)
+      const splay = (Math.random()-0.5) * burst * 0.4;
+      p.vx = tx*vtNew + (-nx)*splay*0.2;
+      p.vy = ty*vtNew + (-ny)*splay*0.2;
+
+      p.shredded = true;
+      p.hot = 1;
+      p.decay = 0.012 + Math.random()*0.010;
+
+      // Spawn 2-3 trail children lagging behind along −tangent, forming the tail.
+      // Children inherit the burst velocity but with decreasing magnitude so they
+      // trail and fan out before fading.
+      const nChildren = 2 + (Math.random()<0.5 ? 1 : 0);
+      for (let k=1; k<=nChildren; k++){
+        const lag = k * (p.size*2.5 + 3); // pixel lag behind parent
+        const vScale = 1 - k*0.18;
+        const cx = p.x - tx*dir*lag;
+        const cy = p.y - ty*dir*lag;
+        bodyParticles.push({
+          cid: p.cid,
+          attached: false,
+          ox: 0, oy: 0,
+          x: cx, y: cy,
+          px: cx, py: cy,
+          vx: p.vx * vScale,
+          vy: p.vy * vScale,
+          size: p.size * (0.8 - k*0.12),
+          r: p.r, g: p.g, b: p.b,
+          life: 1,
+          hot: 1,
+          shredded: true,
+          decay: 0.018 + Math.random()*0.012 + k*0.004,
+          isTail: true
+        });
+      }
+    }
+
+    const extra = d < rs*3 ? (1 + (rs*3/d - 1)*1.8) : 1;
+    // Shredded particles receive weakened radial gravity so they whirl
+    // tangentially around the horizon rather than plunging straight in.
+    const gravMul = p.shredded ? 0.35 : 1;
+    const aBH = G * extra * gravMul / Math.max(d2, 300);
+    p.vx += nx * aBH * dt * 0.10;
+    p.vy += ny * aBH * dt * 0.10;
+
+    // --- IMPACT-POINT REWIND CONVERGENCE ---
+    // Rather than *adding force* (which only curves the trajectory and looks
+    // like a second explosion), we **blend the particle's velocity toward a
+    // target velocity that points straight at the sink**. This exponentially
+    // kills the tangential/outward scatter component and produces a
+    // "rewind-to-impact" convergence feel.
+    for (const s of sinks){
+      if (s.cid !== p.cid) continue;
+      const sdx = s.x - p.x, sdy = s.y - p.y;
+      const sd = Math.sqrt(sdx*sdx + sdy*sdy) + 0.01;
+      const ux = sdx/sd, uy = sdy/sd;
+
+      // target speed ∝ distance → faraway particles arrive in sync with near ones
+      // (0.3× of previous rate for a slower, more graceful rewind)
+      const targetSpeed = Math.min(5.4, sd * 0.054 + 0.45);
+      const tvx = ux * targetSpeed;
+      const tvy = uy * targetSpeed;
+
+      // blend factor — stronger right after impact, tapers with sink life
+      // scaled down to 0.3× so velocity reorientation is gentler
+      const blend = Math.min(0.18, 0.066 * dt * (0.4 + s.life*1.6));
+      p.vx = p.vx * (1 - blend) + tvx * blend;
+      p.vy = p.vy * (1 - blend) + tvy * blend;
+
+      // Fast consumption once inside the sink radius
+      if (sd < rs*0.5 && p.shredded){
+        p.life -= 0.12 * dt;
+      }
+    }
+
+    // --- Disk-flow sweep ---
+    // Inside the accretion zone, particles get dragged along the disk's rotational
+    // current (CCW in our convention). This makes detached body particles spiral
+    // around the BH and merge into the visible accretion stream rather than
+    // plunging straight in.
+    // Skip disk-sweep if a sink is active for this particle's cluster — otherwise
+    // the tangential drag would fight against the rewind convergence.
+    const hasSink = sinks.some(s => s.cid === p.cid);
+    if (d < rs*3.0 && !hasSink){
+      // tangent for counter-clockwise motion at point (p.x, p.y) about BH:
+      //   if radial-out is (-nx, -ny) (away from BH), tangent = (ny, -nx)
+      const tx = ny, ty = -nx;
+      // strength ramps up as particle approaches BH
+      const sweep = 0.06 * (1 - d/(rs*3.0));
+      p.vx += tx * sweep * dt;
+      p.vy += ty * sweep * dt;
+    }
+
+    if (d < rs*2.5){
+      const drag = 0.005 * dt;
+      p.vx *= (1 - drag);
+      p.vy *= (1 - drag);
+    }
+
+    // speed cap — suppresses numerical runaway near the horizon
+    // Shredded particles get a higher cap so the impact-point suction visibly
+    // accelerates them instead of being immediately clipped.
+    const capV = p.shredded ? MAX_PARTICLE_V * 2.2 : MAX_PARTICLE_V;
+    const sp2 = p.vx*p.vx + p.vy*p.vy;
+    if (sp2 > capV*capV){
+      const sp = Math.sqrt(sp2);
+      const k = capV / sp;
+      p.vx *= k; p.vy *= k;
+    }
+
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    if (d < rs*3){
+      p.hot = Math.min(1, p.hot + 0.012*dt);
+    }
+
+    // shredded particles decay their own life; normal particles die on EH contact
+    if (p.shredded){
+      p.life -= p.decay * dt;
+      if (d < rs*0.75) p.life = 0; // fully consumed inside horizon
+    } else {
+      if (d < rs*0.98) p.life = 0;
+    }
+  }
+  bodyParticles = bodyParticles.filter(p=>p.life > 0);
+
+  // decay sinks (extended lifetime to match slower 0.3× rewind speed)
+  for (const s of sinks) s.life -= 0.006 * dt;
+  sinks = sinks.filter(s => s.life > 0);
+}
+
+function drawBodyParticles(){
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const cs = colorScale();
+  const cfg = MASSES[currentMass];
+  const rs = cfg.radius;
+
+  for (const p of bodyParticles){
+    const hot = p.hot;
+    const mixR = p.r*(1-hot) + 220*hot;
+    const mixG = p.g*(1-hot) + 80*hot;
+    const mixB = p.b*(1-hot) + 50*hot;
+    const R = Math.round(mixR*cs);
+    const G = Math.round(mixG*cs);
+    const B = Math.round(mixB*cs);
+
+    // life-modulated alpha so shredded/tail particles fade as they dissipate
+    const lifeFade = Math.max(0, Math.min(1, p.life));
+    const baseA = (0.45 + hot*0.55) * lifeFade;
+    const a1 = Math.min(1, baseA * brightness * 4);
+    const a2 = Math.min(1, baseA * brightness * 8);
+
+    if (p.shredded){
+      // --- Elongated motion streak (spaghetti tail) ---
+      const sx = p.px, sy = p.py;
+      const ex = p.x,  ey = p.y;
+      const len2 = (ex-sx)*(ex-sx) + (ey-sy)*(ey-sy);
+      if (len2 > 0.5){
+        ctx.strokeStyle = `rgba(${R},${G},${B},${a1*0.55})`;
+        ctx.lineWidth = p.size * (2.4 + hot*1.2);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(sx, sy); ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(${R},${G},${B},${a2})`;
+        ctx.lineWidth = p.size * 1.1;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy); ctx.lineTo(ex, ey);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(${R},${G},${B},${a2})`;
+        ctx.beginPath();
+        ctx.arc(ex, ey, p.size, 0, Math.PI*2);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = `rgba(${R},${G},${B},${a1*0.5})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size*(2.2+hot*1.5), 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(${R},${G},${B},${a2})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+let flashes = [];
+function drawFlashes(dt){
+  for (const f of flashes){
+    f.life -= 0.02*dt;
+    const a = Math.max(0, f.life);
+    const gr = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r*3);
+    gr.addColorStop(0, `rgba(255,255,255,${a*0.8})`);
+    gr.addColorStop(0.3, `rgba(255,220,150,${a*0.5})`);
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gr;
+    ctx.beginPath();
+    ctx.arc(f.x,f.y,f.r*3,0,Math.PI*2);
+    ctx.fill();
+  }
+  flashes = flashes.filter(f=>f.life>0);
+}
+
+// drawObjects removed — thrown bodies are now rendered as particle clusters via drawBodyParticles().
+
+// === Starfield ===
+const stars = [];
+for (let i=0;i<400;i++){
+  stars.push({x:Math.random(), y:Math.random(), s:Math.random()*1.2+0.2, tw:Math.random()*Math.PI*2});
+}
+function drawStars(t){
+  for (const s of stars){
+    const dx = s.x*W - CX, dy = s.y*H - CY;
+    const d = Math.hypot(dx,dy);
+    const cfg = MASSES[currentMass];
+    // hide near BH (lensing blackout)
+    if (d < cfg.radius*1.15) continue;
+    const a = 0.5 + Math.sin(t*0.002 + s.tw)*0.3;
+    ctx.fillStyle = `rgba(255,255,255,${a*0.7})`;
+    ctx.fillRect(s.x*W, s.y*H, s.s, s.s);
+  }
+}
+
+// === Main loop ===
+let last = performance.now();
+function loop(t){
+  const raw = Math.min(50, t - last);
+  last = t;
+  const dt = (raw/16.67) * speedMult;
+
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.fillRect(0,0,W,H);
+
+  drawStars(t);
+
+  // Apply zoom around screen center
+  ctx.setTransform(zoom,0,0,zoom, CX - CX*zoom, CY - CY*zoom);
+
+  updateParticles(dt);
+  // Back-layer disk (behind BH), then shadow, then top lensed arc, photon ring, front disk
+  drawEquatorBeam();        // wide horizontal beam behind everything
+  drawDiskLayer(false);     // back half of disk
+  drawBlackHoleShadow();    // black event horizon covers occluded region
+  drawLensedTopArc();       // iconic ring over the top
+  drawPhotonRing();          // bright halo around horizon
+  drawDiskLayer(true);       // front half of disk (crosses under BH)
+  // Re-draw equator core streak on TOP so beam clearly extends past BH on both sides
+  (function(){
+    const cfg = MASSES[currentMass];
+    const rs = cfg.radius;
+    const beamLen = cfg.disk * 1.8;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(CX, CY);
+    ctx.scale(1, (rs*0.12)/beamLen);
+    const core = ctx.createRadialGradient(0,0,0, 0,0, beamLen);
+    core.addColorStop(0.0, `rgba(230,100,65,${0.85*brightness})`);
+    core.addColorStop(0.25,`rgba(170,40,25,${0.45*brightness})`);
+    core.addColorStop(1.0, 'rgba(60,10,8,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(0,0,beamLen,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  })();
+  updateBodyParticles(dt);
+  drawBodyParticles();
+  drawFlashes(dt);
+
+  // Reset transform for UI overlays
+  ctx.setTransform(1,0,0,1,0,0);
+
+  document.getElementById('pc').textContent = particles.length;
+  document.getElementById('oc').textContent = bodyParticles.length;
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// === UI ===
+document.querySelectorAll('#massBtns button').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('#massBtns button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMass = btn.dataset.mass;
+    document.getElementById('massInfo').textContent = MASSES[currentMass].info;
+    makeParticles();
+  });
+});
+document.querySelectorAll('[data-obj]').forEach(btn=>{
+  btn.addEventListener('click',()=> throwObject(btn.dataset.obj));
+});
+const speed = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+speed.addEventListener('input',()=>{
+  speedMult = parseFloat(speed.value);
+  speedVal.textContent = speedMult + 'x';
+});
+const bright = document.getElementById('bright');
+const brightVal = document.getElementById('brightVal');
+bright.addEventListener('input',()=>{
+  brightness = (parseFloat(bright.value)/100) * 0.06;
+  brightVal.textContent = bright.value;
+});
+
+const tiltSlider = document.getElementById('tilt');
+const tiltVal = document.getElementById('tiltVal');
+tiltSlider.addEventListener('input',()=>{
+  const deg = parseFloat(tiltSlider.value);
+  viewTilt = deg * Math.PI / 180;
+  tiltVal.textContent = deg;
+});
+
+const zoomSlider = document.getElementById('zoom');
+const zoomVal = document.getElementById('zoomVal');
+function setZoom(v){
+  v = Math.max(30, Math.min(400, v));
+  zoom = v/100;
+  zoomSlider.value = v;
+  zoomVal.textContent = Math.round(v);
+}
+zoomSlider.addEventListener('input',()=> setZoom(parseFloat(zoomSlider.value)));
+document.getElementById('zoomIn').addEventListener('click',()=> setZoom(parseFloat(zoomSlider.value)+20));
+document.getElementById('zoomOut').addEventListener('click',()=> setZoom(parseFloat(zoomSlider.value)-20));
+canvas.addEventListener('wheel',(e)=>{
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 15 : -15;
+  setZoom(parseFloat(zoomSlider.value) + delta);
+},{passive:false});
+document.getElementById('reset').addEventListener('click',()=>{
+  bodyParticles = []; cores = []; flashes = []; makeParticles();
+});
+</script>
+</body>
+</html>
