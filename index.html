@@ -601,16 +601,18 @@ function updateBodyParticles(dt){
     core.d = d; core.nx = nx; core.ny = ny;
 
     // === TIDAL DISRUPTION EVENT (TDE) ===
-    // When d ≤ r_T the body is torn apart.  Mark core for disruption; the
-    // actual particle release + bound/unbound bifurcation happens below.
+    // When d ≤ r_T the body is torn apart.  The bound/unbound split requires
+    // a *radial velocity reset* (not just a weak kick), otherwise the core's
+    // inward momentum drags both halves into the BH together.
+    //   Bound  half → new radial = +v_esc·0.9  (strongly inward, quick plunge)
+    //   Unbound half → new radial = −v_esc·1.2  (reversed, true hyperbolic escape)
+    // Tangential (angular-momentum-carrying) component is preserved.
     if (!core.disrupted && d <= core.tidalR){
       core.disrupted = true;
-      // Kick magnitude from tidal differential ~ √(G·R_body/r³)
-      const kickBase = Math.sqrt(G * core.radius / Math.max(d2*d, 1000)) * 12;
-      disruptedEvents.push({ cid: core.cid, core, kickBase });
-      // Bright shock flash at disruption point
+      const vEsc = Math.sqrt(2 * G / Math.max(d, rs));
+      disruptedEvents.push({ cid: core.cid, core, vEsc });
       flashes.push({ x: core.x, y: core.y, r: rs*0.25, life: 1 });
-      core.alive = false; // core dissolves into the two streams
+      core.alive = false;
     }
 
     if (core.alive && d < rs*1.0) core.alive = false; // safety
@@ -618,30 +620,56 @@ function updateBodyParticles(dt){
   }
   cores = cores.filter(c => c.alive);
 
-  // --- TDE release: bifurcate attached particles into bound/unbound streams ---
+  // --- TDE release: bifurcate into bound/unbound streams with gradient kick ---
+  // Consistent with attached stretch: rotate-first then stretch-along-world-radial.
+  // Kick magnitude is POSITION-DEPENDENT (∝ exposure) rather than binary, so the
+  // separation surface is a smooth gradient, not a clean knife-cut.
   if (disruptedEvents.length > 0){
     for (const ev of disruptedEvents){
-      const {core, kickBase} = ev;
-      const cA = Math.cos(core.angle), sA = Math.sin(core.angle);
+      const {core, vEsc} = ev;
+      // At phase=1, spin is 85% suppressed (tidal axis locked)
+      const effAngle = core.angle * 0.15;
+      const cA = Math.cos(effAngle), sA = Math.sin(effAngle);
+      const stretchR = 10.0;
+      const compressT = 0.28;
       for (const p of bodyParticles){
         if (p.cid !== core.cid || !p.attached) continue;
-        const wx = p.ox*cA - p.oy*sA;
-        const wy = p.ox*sA + p.oy*cA;
+
+        // Rotate-first internal structure
+        const rox = p.ox*cA - p.oy*sA;
+        const roy = p.ox*sA + p.oy*cA;
+        // Stretch along world-radial (BH direction)
+        const radialComp = rox*core.nx + roy*core.ny;
+        const tCx = rox - radialComp*core.nx;
+        const tCy = roy - radialComp*core.ny;
+        const wx = radialComp*stretchR*core.nx + tCx*compressT;
+        const wy = radialComp*stretchR*core.ny + tCy*compressT;
         p.x = core.x + wx;
         p.y = core.y + wy;
         p.px = p.x; p.py = p.y;
-        // rigid velocity at release (core linear + ω × offset)
-        p.vx = core.vx - core.omega * wy;
-        p.vy = core.vy + core.omega * wx;
-        // nearside (toward BH) → extra inward kick (bound, E<0)
-        // farside  (away)     → extra outward kick (unbound, E>0)
-        const exposure = wx*core.nx + wy*core.ny; // + = nearside
-        const side = exposure >= 0 ? +1 : -1;
-        // kick direction: +core.n = toward BH.  bound pushes +n, unbound pushes -n.
-        p.vx += core.nx * side * kickBase;
-        p.vy += core.ny * side * kickBase;
+
+        // Baseline velocity (mostly orbital + tiny residual spin)
+        const vxR = core.vx - core.omega * 0.15 * wy;
+        const vyR = core.vy + core.omega * 0.15 * wx;
+
+        // === Position-dependent radial kick (continuous tidal energy spread) ===
+        // exposure: wx*core.nx + wy*core.ny ∈ [−R·stretchR, +R·stretchR]
+        //   +1 (full nearside) → strong inward (bound, rapid plunge)
+        //    0 (equator)       → near-zero kick (marginally bound)
+        //   −1 (full farside)  → strong outward (unbound, hyperbolic escape)
+        const exposure = wx*core.nx + wy*core.ny;
+        const expNorm = Math.max(-1, Math.min(1, exposure / (core.radius * stretchR)));
+        // Magnitude tuned so farside escapes (>v_esc) and nearside plunges fast
+        const kickAlongN = expNorm * vEsc * 1.4
+                         + (Math.random() - 0.5) * vEsc * 0.25;   // chaos
+        // Tangential jitter to dissolve the "knife-cut" edge
+        const jitterMag = (Math.random() - 0.5) * vEsc * 0.35 * Math.abs(expNorm);
+        const perpX = -core.ny, perpY = core.nx;
+
+        p.vx = vxR + core.nx * kickAlongN + perpX * jitterMag;
+        p.vy = vyR + core.ny * kickAlongN + perpY * jitterMag;
+        p.stream = expNorm >= 0 ? 'bound' : 'unbound';
         p.attached = false;
-        p.stream = side === +1 ? 'bound' : 'unbound';
       }
     }
   }
@@ -655,27 +683,35 @@ function updateBodyParticles(dt){
       if (!core){ p.attached = false; }
       else {
         p.px = p.x; p.py = p.y;
-        // Progressive tidal stretch begins as the core nears tidalR.
-        // phase: 0 at core.d > 1.5·tidalR, 1 at core.d = tidalR.
+        // Progressive tidal stretch — wider window (3.5·r_T → r_T) and stronger
+        // peak (10×) so the body clearly becomes a long thin noodle.
         const phase = Math.max(0, Math.min(1,
-            (core.tidalR*1.5 - core.d) / (core.tidalR*0.5)));
-        // Decompose offset into radial (toward BH) + tangential components,
-        // then stretch radial and compress tangential → spaghetti profile.
-        const radialComp = p.ox*core.nx + p.oy*core.ny;
-        const tCx = p.ox - radialComp*core.nx;
-        const tCy = p.oy - radialComp*core.ny;
-        const stretchR = 1 + phase * 2.4;
-        const compressT = 1 - phase * 0.45;
-        const localX = radialComp*stretchR*core.nx + tCx*compressT;
-        const localY = radialComp*stretchR*core.ny + tCy*compressT;
-        // Apply rigid rotation on top
-        const cA = Math.cos(core.angle), sA = Math.sin(core.angle);
-        const wx = localX*cA - localY*sA;
-        const wy = localX*sA + localY*cA;
+            (core.tidalR*3.5 - core.d) / (core.tidalR*2.5)));
+
+        // === CRITICAL ORDER: rotate FIRST, then stretch along world-radial ===
+        // Previously the stretch was computed along core.n then rotated by
+        // core.angle, which knocked the noodle off the BH axis. Correct order
+        // is: rotate the internal structure (particles shuffle around), THEN
+        // apply radial-aligned stretch — so the noodle is always aimed at BH.
+        // Spin is also attenuated by phase so tidal forces dominate rotation.
+        const effAngle = core.angle * (1 - phase*0.85);
+        const cA = Math.cos(effAngle), sA = Math.sin(effAngle);
+        const rox = p.ox*cA - p.oy*sA;
+        const roy = p.ox*sA + p.oy*cA;
+
+        const radialComp = rox*core.nx + roy*core.ny;
+        const tCx = rox - radialComp*core.nx;
+        const tCy = roy - radialComp*core.ny;
+        const stretchR = 1 + phase * 9.0;    // up to 10× radial elongation
+        const compressT = 1 - phase * 0.72;  // down to 0.28× tangential
+        const wx = radialComp*stretchR*core.nx + tCx*compressT;
+        const wy = radialComp*stretchR*core.ny + tCy*compressT;
+
         p.x = core.x + wx;
         p.y = core.y + wy;
-        p.vx = core.vx - core.omega * wy;
-        p.vy = core.vy + core.omega * wx;
+        // Rigid velocity (reduced spin contribution as phase → 1)
+        p.vx = core.vx - core.omega * (1 - phase*0.85) * wy;
+        p.vy = core.vy + core.omega * (1 - phase*0.85) * wx;
         if (core.d < rs*3){
           p.hot = Math.min(1, p.hot + 0.012*dt);
         }
